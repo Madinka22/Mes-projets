@@ -1,0 +1,427 @@
+---
+title: "Projet Final Satisfaction"
+author: "Madina GULIYEVA"
+date: "`r format(Sys.Date(), '%d-%m-%Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_section: yes
+    theme: journal
+    df_printed: paged
+    dev: png
+    css: style.css
+lang: fr
+editor_options:
+  echo : FALSE
+  chunk_output_type: console
+---
+
+ ##Analyse 
+```{r}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(lattice)
+library(ROCR)
+library(e1071)
+theme_set(theme_minimal())
+```
+
+#telechargement des donnees
+```{r}
+#telechargement des donnees
+D_test = read.csv("test1.csv", sep=";",header=TRUE)
+D_train = read.csv("train1.csv", sep=";",header=TRUE)
+```
+#supprimer les donnees manquantes
+```{r}
+D_train = na.omit(D_train)
+D_test = na.omit(D_test)
+```
+#combiner ces donnees
+```{r}
+library(dplyr)
+D <- rbind(D_train, D_test)
+```
+```{r}
+dim(D)
+str(D)
+summary(D)
+```
+#Représentez graphiquement les variables explicatives par des boîtes à moustache
+```{r}
+ggplot(data=D,aes(x=satisfaction,y=Food.and.drink,fill=satisfaction)) + geom_boxplot()
+```
+```{r}
+ggplot(data=D,aes(x=satisfaction,y=Flight.Distance,fill=satisfaction)) + geom_boxplot()
+```
+#Faire le sous-echantionnage a 5%
+```{r}
+ensemble_echantillonne <- D %>% 
+  sample_frac(0.05)
+```
+#Decoupage
+```{r}
+set.seed(300)
+indxTrain = createDataPartition(y = ensemble_echantillonne$satisfaction,p = 0.75,list = FALSE)
+Dtrain = ensemble_echantillonne[indxTrain,]
+Dtest = ensemble_echantillonne[-indxTrain,]
+```
+ ##Methode knn
+```{r}
+set.seed(300)
+ctrl.cv <- trainControl(method = "cv", number = 10)
+knn.cvFit <- train(satisfaction ~ ., data = Dtrain, method = "knn",
+                trControl = ctrl.cv, tuneLength = 200,
+                preProcess = c("center", "scale"))
+```
+```{r}
+set.seed(300)
+# Afficher le graphique du processus de validation croisée
+plot(knn.cvFit)
+# Afficher les résultats et les meilleurs paramètres
+print(knn.cvFit$results)
+print(knn.cvFit$bestTune)
+```
+```{r}
+set.seed(300)
+ctrl = trainControl(method="none")
+# apprentissage par knn
+fit.5knn = train(satisfaction ~ ., data = Dtrain, method="knn",
+                       tuneGrid=data.frame(k=5), trControl=ctrl)
+```
+```{r}
+set.seed(300)
+pred.5knn = predict(fit.5knn, newdata=Dtest[,1:22])
+```
+```{r}
+set.seed(300)
+tab.5knn =table(pred.5knn, Dtest$satisfaction)
+mat.5knn = confusionMatrix(tab.5knn, mode = "everything", positive="satisfied")
+print(mat.5knn)
+```
+```{r}
+set.seed(300)
+score.5knn <- predict(fit.5knn, newdata = Dtest[,1:22], type = "prob")
+```
+```{r}
+set.seed(300)
+pred.5knn = prediction(score.5knn[,2], Dtest$satisfaction)
+perf.5knn = performance(pred.5knn, "tpr", "fpr")
+```
+```{r}
+set.seed(300)
+(auc.5knn = performance(pred.5knn, "auc")@y.values[[1]])
+```
+
+ ##Regression logistique
+#avec cv
+```{r}
+set.seed(300)
+ctrlcv.lr = trainControl(method="cv", classProbs=TRUE,
+summaryFunction=twoClassSummary,
+savePredictions = "all" )
+Dtrain$satisfaction <- make.names(Dtrain$satisfaction)
+fitCV.lr = train(satisfaction ~ ., data = Dtrain, method="glm",
+trControl=ctrlcv.lr,metric = "ROC")
+```
+```{r}
+summary(fitCV.lr$finalModel)
+print(varImp(fitCV.lr))
+```
+
+```{r}
+set.seed(300)
+pred.cvlr = predict(fitCV.lr, newdata=Dtest[,1:22])
+pred.cvlr <- as.factor(pred.cvlr)
+Dtest$satisfaction <- factor(Dtest$satisfaction)
+levels(pred.cvlr) <- levels(Dtest$satisfaction)
+tab.cvlr <- table(pred.cvlr, Dtest$satisfaction)
+mat.cvlr <- confusionMatrix(tab.cvlr, mode = "everything", positive = "satisfied")
+print(mat.cvlr)
+```
+#sans cv
+```{r}
+set.seed(300)
+ctrl = trainControl(method="none")
+# apprentissage par régression logistique
+fit.lr = train(satisfaction ~ ., data = Dtrain,method="glm",trControl=ctrl)
+```
+```{r}
+#Analysez les résultats du test de Student :
+summary(fit.lr$finalModel)
+print(varImp(fit.lr))
+```
+```{r}
+set.seed(300)
+pred.lr = predict(fit.lr, newdata=Dtest[,1:22])
+pred.lr <- as.factor(pred.lr)
+Dtest$satisfaction <- factor(Dtest$satisfaction)
+levels(pred.lr) <- levels(Dtest$satisfaction)
+tab.lr <- table(pred.lr, Dtest$satisfaction)
+mat.lr <- confusionMatrix(tab.lr, mode = "everything", positive = "satisfied")
+print(mat.lr)
+```
+```{r}
+set.seed(300)
+score.lr <- predict(fit.lr, newdata=Dtest[,1:22], type = "prob")
+pred.lr  = prediction(score.lr[,2], Dtest$satisfaction)
+perf.lr = performance(pred.lr, "tpr", "fpr")
+(auc.lr = performance(pred.lr, "auc")@y.values[[1]])
+```
+ ## Régression logistique avec sélection des variables selon le critère AIC
+```{r}
+set.seed(300)
+ctrl =trainControl("none")
+fit.lr.aic = train(satisfaction ~ ., data = Dtrain, method="glmStepAIC",
+                   trControl=ctrl)
+```
+```{r}
+set.seed(300)
+#les prédictions des individus l’échantillon test sur le modèle estimé (sous forme de probabilité)
+score.lr.aic = predict(fit.lr.aic, newdata=Dtest, type = "prob")
+print(score.lr.aic)
+
+#On peut afficher les classes prédites :
+class.lr.aic = predict(fit.lr.aic,newdata=Dtest)
+#distribution des classes prédites
+table(class.lr.aic)
+
+#Comparez les valeurs de score.lr et class.lr sur quelques individus de Dtest
+list(head(score.lr.aic), head(class.lr.aic))
+```
+```{r}
+set.seed(300)
+pred.lr.aic = predict(fit.lr.aic, newdata=Dtest[,1:22])
+pred.lr.aic <- as.factor(pred.lr.aic)
+Dtest$satisfaction <- factor(Dtest$satisfaction)
+levels(pred.lr.aic) <- levels(Dtest$satisfaction)
+tab.lr.aic <- table(pred.lr.aic, Dtest$satisfaction)
+mat.lr.aic <- confusionMatrix(tab.lr.aic, mode = "everything", positive = "satisfied")
+print(mat.lr.aic)
+```
+
+ ## Le Bayésien Naïf (NB)
+```{r}
+set.seed(300)
+fit.nbn <- naiveBayes(satisfaction ~ ., data = Dtrain)#apprentissage NB
+pred.nbn <- predict(fit.nbn, newdata = Dtest[,1:22])
+pred.nbn <- as.factor(pred.nbn)
+Dtest$satisfaction <- factor(Dtest$satisfaction)
+levels(pred.nbn) <- levels(Dtest$satisfaction)
+tab.nbn <- table(pred.nbn, Dtest$satisfaction)
+mat.nbn<- confusionMatrix(tab.nbn, mode = "everything", positive = "satisfied")
+print(mat.nbn)
+```
+```{r}
+set.seed(300)
+score.nbn = predict(fit.nbn, newdata=Dtest, type="raw")
+pred.nbn  = prediction(score.nbn[,2], Dtest$satisfaction)
+perf.nbn = performance(pred.nbn, "tpr", "fpr")
+(auc.nbn = performance(pred.nbn, "auc")@y.values[[1]])
+```
+
+ ##L’Analyse Discriminante Linéaire LDA
+```{r}
+set.seed(300)
+# apprentissage par lda
+fit.lda = train(satisfaction ~ ., data = Dtrain, method="lda",trControl=ctrl)
+pred.lda = predict(fit.lda, newdata=Dtest[,1:22])
+pred.lda <- as.factor(pred.lda)
+Dtest$satisfaction <- factor(Dtest$satisfaction)
+levels(pred.lda) <- levels(Dtest$satisfaction)
+tab.lda <- table(pred.lda, Dtest$satisfaction)
+mat.lda<- confusionMatrix(tab.lda, mode = "everything", positive = "satisfied")
+print(mat.lda)
+```
+```{r}
+set.seed(300)
+#les prédictions des individus l’échantillon test sur le modèle estimé (sous forme de probabilité)
+score.lda = predict(fit.lda, newdata=Dtest, type="prob")
+pred.lda  = prediction(score.lda[,2], Dtest$satisfaction)
+perf.lda = performance(pred.lda, "tpr", "fpr")
+(auc.lda = performance(pred.lda, "auc")@y.values[[1]])
+```
+ ##QDA
+```{r}
+set.seed(300)
+fit.qda = train(satisfaction ~ ., data = Dtrain, method="qda", trControl=ctrl)
+pred.qda = predict(fit.qda, newdata=Dtest[,1:22])
+pred.qda <- as.factor(pred.qda)
+Dtest$satisfaction <- factor(Dtest$satisfaction)
+levels(pred.qda) <- levels(Dtest$satisfaction)
+tab.qda <- table(pred.qda, Dtest$satisfaction)
+mat.qda<- confusionMatrix(tab.qda, mode = "everything", positive = "satisfied")
+print(mat.qda)
+```
+```{r}
+set.seed(300)
+score.qda = predict(fit.qda, newdata=Dtest, type="prob")
+pred.qda  = prediction(score.qda[,2], Dtest$satisfaction)
+perf.qda = performance(pred.qda, "tpr", "fpr")
+(auc.qda = performance(pred.qda, "auc")@y.values[[1]])
+```
+
+ ##SVM LINEAR
+#avec CV
+```{r}
+set.seed(300)
+ctrl  = trainControl(method="cv",number=5)
+svmGrid_lin = seq(0.001,0.02,by=0.001)
+CVfitLin.svm = train(satisfaction ~., data=Dtrain,method="svmLinear",
+                type="C-svc",trControl=ctrl,
+                tuneGrid = data.frame(.C = svmGrid_lin))
+```
+```{r}
+plot(CVfitLin.svm)
+CVfitLin.svm$bestTune
+```
+
+```{r}
+ctrl = trainControl(method="none",classProbs=TRUE,
+                     summaryFunction=twoClassSummary,
+                     savePredictions = "all" )
+fitLin.svm = train(satisfaction~.,data=Dtrain, method="svmLinear",type="C-svc",
+                    trControl=ctrl,tuneGrid = data.frame(.C = 0.014	)) #apprentissage svm linear
+```
+```{r}
+pred.svm = predict(fitLin.svm,newdata=Dtest[,1:22])
+pred.svm <- as.factor(pred.svm)
+Dtest$satisfaction <- factor(Dtest$satisfaction)
+levels(pred.svm) <- levels(Dtest$satisfaction)
+tab.svm <- table(pred.svm, Dtest$satisfaction)
+mat.svm<- confusionMatrix(tab.svm, mode = "everything", positive = "satisfied")
+print(mat.svm)
+```
+```{r}
+set.seed(300)
+score.svm <- predict(fitLin.svm, newdata = Dtest[,1:22], type = "prob")
+pred.svm = prediction(score.svm[,2], Dtest$satisfaction)
+perf.svm = performance(pred.svm, "tpr", "fpr")
+(auc.svm = performance(pred.svm, "auc")@y.values[[1]])
+```
+ ##SVM GAUSSIEN
+```{r}
+set.seed(300)
+ctrl  = trainControl(method="cv",number= 5, classProbs=TRUE,
+                     savePredictions = "all" )
+svmGrid_gaus = expand.grid(.sigma = 2^c(-15, -10, -5, 0, 5),
+                           .C = 2^c(0:3))
+Dtrain$satisfaction <- as.factor(make.names(as.character(Dtrain$satisfaction)))
+CVfitGaus.svm = train(satisfaction~., data=Dtrain, method = "svmRadial",
+                      trControl = ctrl,
+                      tuneGrid = svmGrid_gaus)
+```
+
+```{r}
+set.seed(300)
+plot(CVfitGaus.svm)
+(Cbest = CVfitGaus.svm$bestTune[2])
+(sbest = CVfitGaus.svm$bestTune[1])
+```
+
+```{r}
+set.seed(300)
+ctrl = trainControl(method="none",classProbs=TRUE,
+                     summaryFunction=twoClassSummary,
+                     savePredictions = "all" )
+fitGaus.svm = train(satisfaction~., data=Dtrain, method = "svmRadial",
+                    trControl = ctrl,
+                    tuneGrid = data.frame(.C = 4, .sigma = 0.03125	))#apprentissage svm gaussien
+```
+```{r}
+set.seed(300)
+pred.svmGaus = predict(fitGaus.svm,newdata=Dtest[,1:22])
+pred.svmGaus <- as.factor(pred.svmGaus)
+Dtest$satisfaction <- factor(Dtest$satisfaction)
+levels(pred.svmGaus) <- levels(Dtest$satisfaction)
+tab.svmGaus <- table(pred.svmGaus, Dtest$satisfaction)
+mat.svmGaus<- confusionMatrix(tab.svmGaus, mode = "everything", positive = "satisfied")
+print(mat.svmGaus)
+```
+```{r}
+set.seed(300)
+score.svmGaus <- predict(fitGaus.svm, newdata = Dtest[,1:22], type = "prob")
+pred.svmGaus = prediction(score.svmGaus[,2], Dtest$satisfaction)
+perf.svmGaus = performance(pred.svmGaus, "tpr", "fpr")
+(auc.svmGaus = performance(pred.svmGaus, "auc")@y.values[[1]])
+```
+
+ ##SVM POLY
+```{r}
+set.seed(300)
+ctrl  = trainControl(method="cv",number=5, classProbs=TRUE,
+                     savePredictions = "all" )
+svmGrid_poly = expand.grid(.degree=(2:4), .scale=.1,
+                           .C=c(0.1,1,3,5,10,20,50, 100))
+
+CVfitPoly.svm = train(satisfaction~., data=Dtrain, method = "svmPoly",
+                      trControl = ctrl,
+                      tuneGrid = svmGrid_poly)
+```
+
+
+```{r}
+set.seed(300)
+plot(CVfitPoly.svm)
+(degree.best = CVfitPoly.svm$bestTune[1])
+(scale.best = CVfitPoly.svm$bestTune[2])
+(Cp.best = CVfitPoly.svm$bestTune[3])
+```
+```{r}
+set.seed(300)
+ctrl = trainControl(method="none",classProbs=TRUE,
+                     summaryFunction=twoClassSummary,
+                     savePredictions = "all" )
+fitPoly.svm = train(satisfaction~., data=Dtrain, method = "svmPoly",
+                    trControl = ctrl,
+                    tuneGrid = data.frame(.C =0.1	, .degree=3, .scale=0.1))#apprentissage svm poly
+```
+```{r}
+set.seed(300)
+pred.svmPoly = predict(fitPoly.svm,newdata=Dtest[,1:22])
+pred.svmPoly <- as.factor(pred.svmPoly)
+Dtest$satisfaction <- factor(Dtest$satisfaction)
+levels(pred.svmPoly) <- levels(Dtest$satisfaction)
+tab.svmPoly <- table(pred.svmPoly, Dtest$satisfaction)
+mat.svmPoly<- confusionMatrix(tab.svmPoly, mode = "everything", positive = "satisfied")
+print(mat.svmPoly)
+```
+```{r}
+set.seed(300)
+score.svmPoly <- predict(fitPoly.svm, newdata = Dtest[,1:22], type = "prob")
+pred.svmPoly = prediction(score.svmPoly[,2], Dtest$satisfaction)
+perf.svmPoly = performance(pred.svmPoly, "tpr", "fpr")
+(auc.svmPoly = performance(pred.svmPoly, "auc")@y.values[[1]])
+```
+
+ ##Comparaison des toutes les modeles
+```{r}
+set.seed(300)
+legend_labels <- c(
+  paste("KNN :", round(auc.5knn, 2)),
+  paste("Regression logit :",round(auc.lr, 2)),
+  paste("NB :",round(auc.nbn, 2)),
+  paste("LDA :",round(auc.lda, 2)),
+  paste("QDA :",round(auc.qda, 2)),
+  paste("SVM LINEAR :", round(auc.svm, 2)),
+  paste("SVM GAUSSIEN :", round(auc.svmGaus, 2)),
+  paste("SVM POLY :", round(auc.svmPoly, 2)))
+```
+
+```{r}
+set.seed(300)
+plot(perf.5knn, col = "red", main = "Courbes ROC", lty = 1)
+plot(perf.lr, col = "blue", add = TRUE, lty = 2)
+plot(perf.nbn, col = "green", add = TRUE, lty = 3)
+plot(perf.lda, col = "pink", add = TRUE, lty = 4)
+plot(perf.qda, col = "yellow", add = TRUE, lty = 5)
+plot(perf.svm, col = "purple", add = TRUE, lty = 6)
+plot(perf.svmGaus, col = "orange", add = TRUE, lty = 7)
+plot(perf.svmPoly, col = "grey", add = TRUE, lty = 8)
+legend(0.6, 0.6, legend = legend_labels,
+       col = c("red","blue", "green", "pink", "yellow", "purple", "orange", "grey"),
+       lty = c(1, 2, 3, 4, 5, 6, 7, 8))
+```
+
